@@ -143,6 +143,9 @@ class LLaDAModel(BaseModel):
                  batch_size_ = 1,
                  diff_confidence_eos_eot_inf = False,
                  diff_logits_eos_inf = False,
+                 trace_every_n_steps = 0,
+                 trace_output_dir = None,
+                 trace_save_hidden_states = False,
                  ) -> None:
         super().__init__(path=path,
                          max_seq_len=max_seq_len,
@@ -182,6 +185,9 @@ class LLaDAModel(BaseModel):
         self.mask_id = mask_id
         self.diff_confidence_eos_eot_inf = diff_confidence_eos_eot_inf
         self.diff_logits_eos_inf = diff_logits_eos_inf
+        self.trace_every_n_steps = trace_every_n_steps
+        self.trace_output_dir = trace_output_dir
+        self.trace_save_hidden_states = trace_save_hidden_states
 
         self.template_parser = _get_meta_template(meta_template)
 
@@ -376,8 +382,11 @@ class LLaDAModel(BaseModel):
         print('temperature:', self.temperature, 'cfg:', self.cfg, 'remasking:', self.remasking)
         print('mask_id:', self.mask_id, 'padding_id:', self.padding_id)
         print('diff_confidence_eos_eot_inf:', self.diff_confidence_eos_eot_inf, 'diff_logits_eos_inf:', self.diff_logits_eos_inf)
+        print('trace_every_n_steps:', self.trace_every_n_steps, 'trace_output_dir:', self.trace_output_dir,
+              'trace_save_hidden_states:', self.trace_save_hidden_states)
         print('final prompt:', prompt)
         self.tokenizer.padding_side = "left" 
+        prompt_texts = prompt
         prompt = self.tokenizer.batch_encode_plus(prompt, padding = True, return_tensors='pt')['input_ids']
         x = LLaDA_generate(
             model = self.model,
@@ -391,6 +400,10 @@ class LLaDAModel(BaseModel):
             mask_id = self.mask_id,
             confidence_eos_eot_inf = self.diff_confidence_eos_eot_inf,
             logits_eos_inf = self.diff_logits_eos_inf,
+            trace_every_n_steps=self.trace_every_n_steps,
+            trace_output_dir=self.trace_output_dir,
+            trace_save_hidden_states=self.trace_save_hidden_states,
+            trace_prompts=prompt_texts,
         )
         responses = []
         batch_size = prompt.shape[0]

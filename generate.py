@@ -1,5 +1,9 @@
-import torch
+import hashlib
+import json
+from pathlib import Path
+
 import numpy as np
+import torch
 import torch.nn.functional as F
 
 from transformers import AutoTokenizer, AutoModel
@@ -42,7 +46,9 @@ def get_num_transfer_tokens(mask_index, steps):
 
 @ torch.no_grad()
 def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, block_length=128, temperature=0.,
-             cfg_scale=0., remasking='low_confidence', mask_id=126336, logits_eos_inf=False, confidence_eos_eot_inf=False):
+             cfg_scale=0., remasking='low_confidence', mask_id=126336, logits_eos_inf=False,
+             confidence_eos_eot_inf=False, trace_every_n_steps=0, trace_output_dir=None,
+             trace_save_hidden_states=False, trace_prompts=None):
     '''
     Args:
         model: Mask predictor.
@@ -71,11 +77,31 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
     assert steps % num_blocks == 0
     steps = steps // num_blocks
 
+    trace_enabled = trace_every_n_steps and trace_every_n_steps > 0 and trace_output_dir
+    traces = None
+    trace_root = None
+    if trace_enabled:
+        trace_root = Path(trace_output_dir)
+        trace_root.mkdir(parents=True, exist_ok=True)
+        traces = []
+        for batch_idx in range(prompt.shape[0]):
+            prompt_text = trace_prompts[batch_idx] if trace_prompts else f'batch_{batch_idx}'
+            prompt_hash = hashlib.sha1(prompt_text.encode('utf-8')).hexdigest()[:16]
+            traces.append(
+                dict(
+                    batch_idx=batch_idx,
+                    prompt=prompt_text,
+                    prompt_hash=prompt_hash,
+                    steps=[],
+                ))
+
+    global_step = 0
     for num_block in range(num_blocks):
         block_mask_index = (x[:, prompt.shape[1] + num_block * block_length: prompt.shape[1] + (num_block + 1) * block_length:] == mask_id)
         num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps)
         for i in range(steps):
             mask_index = (x == mask_id)
+            model_outputs = None
             if cfg_scale > 0.:
                 un_x = x.clone()
                 un_x[prompt_index] = mask_id
@@ -86,7 +112,12 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
                 logits, un_logits = torch.chunk(logits, 2, dim=0)
                 logits = un_logits + (cfg_scale + 1) * (logits - un_logits)
             else:
-                logits = model(x, attention_mask=attention_mask).logits
+                model_outputs = model(
+                    x,
+                    attention_mask=attention_mask,
+                    output_hidden_states=trace_enabled,
+                    return_dict=True)
+                logits = model_outputs.logits
 
             if logits_eos_inf:
                 logits[:, :, 126081] = -torch.inf
@@ -112,10 +143,44 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
             confidence = torch.where(mask_index, x0_p, -np.inf)
 
             transfer_index = torch.zeros_like(x0, dtype=torch.bool, device=x0.device)
+            selected_positions_per_sample = []
+            selected_confidence_per_sample = []
             for j in range(confidence.shape[0]):
                 _, select_index = torch.topk(confidence[j], k=num_transfer_tokens[j, i])
                 transfer_index[j, select_index] = True
+                selected_positions_per_sample.append(select_index.tolist())
+                selected_confidence_per_sample.append(confidence[j, select_index].tolist())
             x[transfer_index] = x0[transfer_index]
+
+            if trace_enabled and (global_step % trace_every_n_steps == 0):
+                hidden_states = None
+                if model_outputs is not None and model_outputs.hidden_states:
+                    hidden_states = model_outputs.hidden_states[-1]
+                for j in range(confidence.shape[0]):
+                    step_record = {
+                        'global_step': global_step,
+                        'block_idx': num_block,
+                        'step_in_block': i,
+                        'selected_positions': selected_positions_per_sample[j],
+                        'selected_confidence': selected_confidence_per_sample[j],
+                        'selected_confidence_mean': float(np.mean(selected_confidence_per_sample[j]))
+                        if selected_confidence_per_sample[j] else None,
+                    }
+                    if trace_save_hidden_states and hidden_states is not None:
+                        hs_path = trace_root / 'hidden_states' / f"{traces[j]['prompt_hash']}_step_{global_step:04d}.pt"
+                        hs_path.parent.mkdir(parents=True, exist_ok=True)
+                        selected_pos_tensor = torch.tensor(selected_positions_per_sample[j], device=hidden_states.device)
+                        selected_hidden = hidden_states[j, selected_pos_tensor].detach().cpu().to(torch.float16)
+                        torch.save(selected_hidden, hs_path)
+                        step_record['hidden_state_path'] = str(hs_path)
+                    traces[j]['steps'].append(step_record)
+            global_step += 1
+
+    if trace_enabled:
+        trace_jsonl = trace_root / 'trace_records.jsonl'
+        with open(trace_jsonl, 'a', encoding='utf-8') as f:
+            for item in traces:
+                f.write(json.dumps(item, ensure_ascii=False) + '\n')
 
     return x
 

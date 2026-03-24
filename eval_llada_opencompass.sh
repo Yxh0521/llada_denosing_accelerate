@@ -37,6 +37,11 @@ python run.py examples/llada_instruct_gen_ifeval_length512_block512_confidence.p
 python run.py examples/llada_instruct_gen_gsm8k_length256_block8.py -w outputs/llada_instruct_gen_gsm8k_length256_block8
 python run.py examples/llada_instruct_gen_math_length512_block64.py -w outputs/llada_instruct_gen_math_length512_block64
 
+# GSM8K trace experiment (0/2/4-shot): step-wise hidden state + confidence
+python run.py examples/llada_instruct_gen_gsm8k_trace_0shot.py -w outputs/llada_instruct_gsm8k_trace_0shot
+python run.py examples/llada_instruct_gen_gsm8k_trace_2shot.py -w outputs/llada_instruct_gsm8k_trace_2shot
+python run.py examples/llada_instruct_gen_gsm8k_trace_4shot.py -w outputs/llada_instruct_gsm8k_trace_4shot
+
 
 
 # LLaDA 1.5
