@@ -194,8 +194,14 @@ class LLaDAModel(BaseModel):
     def _load_tokenizer(self, path: str, tokenizer_path: Optional[str],
                         tokenizer_kwargs: dict):
         from transformers import AutoTokenizer
+        pretrained_path = tokenizer_path if tokenizer_path else path
+        pretrained_path = os.path.expanduser(pretrained_path)
+        tokenizer_load_kwargs = dict(tokenizer_kwargs)
+        if os.path.isdir(pretrained_path):
+            # Avoid huggingface_hub validating local absolute paths as repo ids.
+            tokenizer_load_kwargs.setdefault('local_files_only', True)
         self.tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_path if tokenizer_path else path, **tokenizer_kwargs)
+            pretrained_path, **tokenizer_load_kwargs)
 
         # A patch for some models without pad_token_id
         if self.pad_token_id is not None:
@@ -217,7 +223,12 @@ class LLaDAModel(BaseModel):
                 self.tokenizer.pad_token = self.tokenizer.eos_token
             else:
                 from transformers.generation import GenerationConfig
-                gcfg = GenerationConfig.from_pretrained(path)
+                generation_source = os.path.expanduser(path)
+                generation_kwargs = {}
+                if os.path.isdir(generation_source):
+                    generation_kwargs['local_files_only'] = True
+                gcfg = GenerationConfig.from_pretrained(generation_source,
+                                                        **generation_kwargs)
 
                 if gcfg.pad_token_id is not None:
                     self.logger.warning(
