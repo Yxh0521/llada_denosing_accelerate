@@ -3,9 +3,8 @@ from copy import deepcopy
 from mmengine.config import read_base
 
 with read_base():
-    from opencompass.opencompass.configs.datasets.gsm8k.gsm8k_gen import \
-        gsm8k_datasets
-    from opencompass.opencompass.configs.models.dllm.llada_instruct_8b import \
+    from opencompass.configs.datasets.gsm8k.gsm8k_gen import gsm8k_datasets
+    from opencompass.configs.models.dllm.llada_instruct_8b import \
         models as llada_instruct_8b_models
 
 # Keep the same 4-shot GSM8K prompt template as gsm8k_gen,
