@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -143,7 +144,18 @@ class LLaDAModel(BaseModel):
                  batch_size_ = 1,
                  diff_confidence_eos_eot_inf = False,
                  diff_logits_eos_inf = False,
+                 diff_trace_every = 0,
+                 diff_trace_topk = 5,
+                 diff_trace_output = None,
+                 **kwargs,
                  ) -> None:
+        # Backward/forward compatibility for custom config keys
+        if 'diff_trace_every' in kwargs:
+            diff_trace_every = kwargs.pop('diff_trace_every')
+        if 'diff_trace_topk' in kwargs:
+            diff_trace_topk = kwargs.pop('diff_trace_topk')
+        if 'diff_trace_output' in kwargs:
+            diff_trace_output = kwargs.pop('diff_trace_output')
         super().__init__(path=path,
                          max_seq_len=max_seq_len,
                          tokenizer_only=tokenizer_only,
@@ -182,6 +194,9 @@ class LLaDAModel(BaseModel):
         self.mask_id = mask_id
         self.diff_confidence_eos_eot_inf = diff_confidence_eos_eot_inf
         self.diff_logits_eos_inf = diff_logits_eos_inf
+        self.diff_trace_every = diff_trace_every
+        self.diff_trace_topk = diff_trace_topk
+        self.diff_trace_output = diff_trace_output
 
         self.template_parser = _get_meta_template(meta_template)
 
@@ -379,7 +394,7 @@ class LLaDAModel(BaseModel):
         print('final prompt:', prompt)
         self.tokenizer.padding_side = "left" 
         prompt = self.tokenizer.batch_encode_plus(prompt, padding = True, return_tensors='pt')['input_ids']
-        x = LLaDA_generate(
+        output = LLaDA_generate(
             model = self.model,
             prompt = prompt.to(self.model.device),
             steps = self.gen_steps,
@@ -391,7 +406,29 @@ class LLaDAModel(BaseModel):
             mask_id = self.mask_id,
             confidence_eos_eot_inf = self.diff_confidence_eos_eot_inf,
             logits_eos_inf = self.diff_logits_eos_inf,
+            tokenizer=self.tokenizer,
+            trace_every=self.diff_trace_every,
+            trace_topk=self.diff_trace_topk,
+            return_traces=self.diff_trace_every > 0,
         )
+        if self.diff_trace_every > 0:
+            x, traces = output
+            if self.diff_trace_output:
+                trace_path = Path(self.diff_trace_output)
+                trace_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(traces, trace_path)
+                meta = {
+                    'trace_every': self.diff_trace_every,
+                    'trace_topk': self.diff_trace_topk,
+                    'gen_steps': self.gen_steps,
+                    'gen_length': self.gen_length,
+                    'gen_blocksize': self.gen_blocksize,
+                    'num_samples': len(traces),
+                }
+                trace_path.with_suffix('.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
+                print(f'saved trace to {trace_path}')
+        else:
+            x = output
         responses = []
         batch_size = prompt.shape[0]
         
@@ -515,7 +552,7 @@ class LLaDABaseModel(LLaDAModel):
         print('final prompt:', prompt)
         self.tokenizer.padding_side = "left" 
         prompt = self.tokenizer.batch_encode_plus(prompt, padding = True, return_tensors='pt')['input_ids']
-        x = LLaDA_generate(
+        output = LLaDA_generate(
             model = self.model,
             prompt = prompt.to(self.model.device),
             steps = self.gen_steps,
@@ -527,7 +564,29 @@ class LLaDABaseModel(LLaDAModel):
             mask_id = self.mask_id,
             confidence_eos_eot_inf = self.diff_confidence_eos_eot_inf,
             logits_eos_inf = self.diff_logits_eos_inf,
+            tokenizer=self.tokenizer,
+            trace_every=self.diff_trace_every,
+            trace_topk=self.diff_trace_topk,
+            return_traces=self.diff_trace_every > 0,
         )
+        if self.diff_trace_every > 0:
+            x, traces = output
+            if self.diff_trace_output:
+                trace_path = Path(self.diff_trace_output)
+                trace_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(traces, trace_path)
+                meta = {
+                    'trace_every': self.diff_trace_every,
+                    'trace_topk': self.diff_trace_topk,
+                    'gen_steps': self.gen_steps,
+                    'gen_length': self.gen_length,
+                    'gen_blocksize': self.gen_blocksize,
+                    'num_samples': len(traces),
+                }
+                trace_path.with_suffix('.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding='utf-8')
+                print(f'saved trace to {trace_path}')
+        else:
+            x = output
         responses = []
         batch_size = prompt.shape[0]
         

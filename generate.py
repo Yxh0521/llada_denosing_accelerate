@@ -42,7 +42,8 @@ def get_num_transfer_tokens(mask_index, steps):
 
 @ torch.no_grad()
 def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, block_length=128, temperature=0.,
-             cfg_scale=0., remasking='low_confidence', mask_id=126336, logits_eos_inf=False, confidence_eos_eot_inf=False):
+             cfg_scale=0., remasking='low_confidence', mask_id=126336, logits_eos_inf=False, confidence_eos_eot_inf=False,
+             tokenizer=None, trace_every=0, trace_topk=5, return_traces=False):
     '''
     Args:
         model: Mask predictor.
@@ -71,6 +72,9 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
     assert steps % num_blocks == 0
     steps = steps // num_blocks
 
+    traces = [[] for _ in range(prompt.shape[0])] if return_traces else None
+    global_step = 0
+
     for num_block in range(num_blocks):
         block_mask_index = (x[:, prompt.shape[1] + num_block * block_length: prompt.shape[1] + (num_block + 1) * block_length:] == mask_id)
         num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps)
@@ -82,11 +86,15 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
                 x_ = torch.cat([x, un_x], dim=0)
                 if attention_mask is not None:
                     attention_mask_ = torch.cat([attention_mask, attention_mask], dim=0)
-                logits = model(x_, attention_mask=attention_mask_).logits
+                model_outputs = model(x_, attention_mask=attention_mask_, output_hidden_states=return_traces)
+                logits = model_outputs.logits
                 logits, un_logits = torch.chunk(logits, 2, dim=0)
                 logits = un_logits + (cfg_scale + 1) * (logits - un_logits)
+                last_hidden = model_outputs.hidden_states[-1][:x.shape[0]] if return_traces else None
             else:
-                logits = model(x, attention_mask=attention_mask).logits
+                model_outputs = model(x, attention_mask=attention_mask, output_hidden_states=return_traces)
+                logits = model_outputs.logits
+                last_hidden = model_outputs.hidden_states[-1] if return_traces else None
 
             if logits_eos_inf:
                 logits[:, :, 126081] = -torch.inf
@@ -115,8 +123,43 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
             for j in range(confidence.shape[0]):
                 _, select_index = torch.topk(confidence[j], k=num_transfer_tokens[j, i])
                 transfer_index[j, select_index] = True
-            x[transfer_index] = x0[transfer_index]
 
+            if return_traces and trace_every > 0 and (global_step % trace_every == 0):
+                for b in range(x.shape[0]):
+                    unresolved_positions = torch.where(mask_index[b])[0]
+                    candidate_tokens = {}
+                    if unresolved_positions.numel() > 0:
+                        candidate_logits = logits[b, unresolved_positions]
+                        candidate_probs = F.softmax(logits[b, unresolved_positions], dim=-1)
+                        k = min(trace_topk, candidate_logits.shape[-1])
+                        topk_scores, topk_ids = torch.topk(candidate_logits, k=k, dim=-1)
+                        topk_probs = torch.gather(candidate_probs, 1, topk_ids)
+                        for idx, pos in enumerate(unresolved_positions):
+                            token_ids = topk_ids[idx].detach().cpu().tolist()
+                            candidate_tokens[str(int(pos.item()))] = {
+                                'token_ids': token_ids,
+                                'tokens': tokenizer.convert_ids_to_tokens(token_ids) if tokenizer is not None else token_ids,
+                                'logits': topk_scores[idx].detach().cpu().tolist(),
+                                'probs': topk_probs[idx].detach().cpu().tolist(),
+                            }
+
+                    gen_ids = x[b, prompt.shape[1]:]
+                    gen_ids = gen_ids[gen_ids != mask_id]
+                    step_result = tokenizer.decode(gen_ids, skip_special_tokens=True).strip() if tokenizer is not None and gen_ids.numel() > 0 else ''
+                    traces[b].append({
+                        'step': global_step,
+                        'token_ids': x[b].detach().cpu(),
+                        'hidden_state': last_hidden[b].detach().cpu() if last_hidden is not None else None,
+                        'token_confidence': confidence[b].detach().cpu(),
+                        'step_result': step_result,
+                        'candidate_tokens': candidate_tokens,
+                    })
+
+            x[transfer_index] = x0[transfer_index]
+            global_step += 1
+
+    if return_traces:
+        return x, traces
     return x
 
 

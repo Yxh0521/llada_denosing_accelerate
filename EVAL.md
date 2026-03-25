@@ -154,3 +154,27 @@ for their great work!
 
 
 
+
+
+## Early-stop research workflow on GSM8K
+To run **OpenCompass framework inference** on GSM8K train split and save traces every 30 steps, use:
+
+```bash
+cd opencompass
+LLADA_MODEL_PATH=/your/model/path \
+python run.py examples/llada_instruct_gen_gsm8k_train_trace_length256_block8.py \
+  -w outputs/llada_instruct_gsm8k_train_trace_length256_block8
+```
+
+The example is self-contained (no dependency on `opencompass.configs.*` import paths), and trace output is controlled by model config fields:
+- `diff_trace_every=30`
+- `diff_trace_topk=5`
+- `diff_trace_output='outputs/gsm8k_train_trace_step30.pt'`
+
+Each saved snapshot contains:
+- `hidden_state` (token-level hidden states)
+- `token_confidence` (current-step confidence on unresolved positions)
+- `step_result` (current intermediate decoded result)
+- `candidate_tokens` (top-k candidate token logits/probs)
+
+You can also set `reader_cfg.test_range` in the example file (default `[:200]`) to control how many train samples are inferred.
