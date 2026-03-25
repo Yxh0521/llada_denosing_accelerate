@@ -20,7 +20,6 @@ from opencompass.utils.prompt import PromptList
 from generate import generate as LLaDA_generate
 import torch.nn.functional as F
 import numpy as np
-from opencompass.datasets.gsm8k import gsm8k_dataset_postprocess, gsm8k_postprocess
 PromptType = Union[PromptList, str]
 def _get_meta_template(meta_template):
     default_meta_template = dict(
@@ -68,21 +67,6 @@ def get_num_transfer_tokens(mask_index, steps):
 
     return num_transfer_tokens
 
-
-def _gsm8k_dataset_postprocess(text: Optional[str]) -> Optional[str]:
-    if not text:
-        return None
-    if '#### ' not in text:
-        return None
-    return text.split('#### ')[1].replace(',', '')
-
-
-def _gsm8k_postprocess(text: str) -> str:
-    text = text.split('Question:')[0]
-    numbers = re.findall(r'\-?\d+\.\d+|\-?\d+', text)
-    if not numbers:
-        return 'NULL'
-    return numbers[-1]
 
 
 @MODELS.register_module()
@@ -247,8 +231,9 @@ class LLaDAModel(BaseModel):
             x[sample_idx, prompt_length:], skip_special_tokens=True)
         golds = self._trace_context.get('golds', [])
         gold = golds[sample_idx] if sample_idx < len(golds) else None
-        gold_value = _gsm8k_dataset_postprocess(gold) if gold else None
-        pred_value = _gsm8k_postprocess(candidate_answer)
+        from opencompass.datasets.gsm8k import gsm8k_dataset_postprocess,gsm8k_postprocess
+        gold_value = gsm8k_dataset_postprocess(gold) if gold else None
+        pred_value = gsm8k_postprocess(candidate_answer)
         is_correct = (pred_value == gold_value) if gold_value is not None else None
         hidden_state = None
         if hidden_states is not None:
