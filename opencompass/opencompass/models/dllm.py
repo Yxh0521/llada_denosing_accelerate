@@ -20,6 +20,7 @@ from opencompass.utils.prompt import PromptList
 from generate import generate as LLaDA_generate
 import torch.nn.functional as F
 import numpy as np
+from opencompass.datasets.gsm8k import gsm8k_dataset_postprocess, gsm8k_postprocess
 PromptType = Union[PromptList, str]
 def _get_meta_template(meta_template):
     default_meta_template = dict(
