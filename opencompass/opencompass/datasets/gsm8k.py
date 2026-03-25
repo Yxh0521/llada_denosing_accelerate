@@ -35,6 +35,16 @@ class GSM8KDataset(BaseDataset):
         return dataset
 
 
+@LOAD_DATASET.register_module()
+class GSM8KTrainDataset(BaseDataset):
+
+    @staticmethod
+    def load(path):
+        dataset = GSM8KDataset.load(path)
+        dataset['test'] = dataset['train']
+        return dataset
+
+
 @TEXT_POSTPROCESSORS.register_module('gsm8k_dataset')
 def gsm8k_dataset_postprocess(text: str) -> str:
     return text.split('#### ')[1].replace(',', '')

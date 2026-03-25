@@ -42,7 +42,8 @@ def get_num_transfer_tokens(mask_index, steps):
 
 @ torch.no_grad()
 def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, block_length=128, temperature=0.,
-             cfg_scale=0., remasking='low_confidence', mask_id=126336, logits_eos_inf=False, confidence_eos_eot_inf=False):
+             cfg_scale=0., remasking='low_confidence', mask_id=126336, logits_eos_inf=False,
+             confidence_eos_eot_inf=False, trace_callback=None):
     '''
     Args:
         model: Mask predictor.
@@ -71,22 +72,29 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
     assert steps % num_blocks == 0
     steps = steps // num_blocks
 
+    global_step = 0
+    total_steps = steps * num_blocks
     for num_block in range(num_blocks):
         block_mask_index = (x[:, prompt.shape[1] + num_block * block_length: prompt.shape[1] + (num_block + 1) * block_length:] == mask_id)
         num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps)
         for i in range(steps):
             mask_index = (x == mask_id)
+            model_kwargs = {}
+            if trace_callback is not None:
+                model_kwargs.update(output_hidden_states=True, return_dict=True)
             if cfg_scale > 0.:
                 un_x = x.clone()
                 un_x[prompt_index] = mask_id
                 x_ = torch.cat([x, un_x], dim=0)
                 if attention_mask is not None:
                     attention_mask_ = torch.cat([attention_mask, attention_mask], dim=0)
-                logits = model(x_, attention_mask=attention_mask_).logits
+                output = model(x_, attention_mask=attention_mask_, **model_kwargs)
+                logits = output.logits
                 logits, un_logits = torch.chunk(logits, 2, dim=0)
                 logits = un_logits + (cfg_scale + 1) * (logits - un_logits)
             else:
-                logits = model(x, attention_mask=attention_mask).logits
+                output = model(x, attention_mask=attention_mask, **model_kwargs)
+                logits = output.logits
 
             if logits_eos_inf:
                 logits[:, :, 126081] = -torch.inf
@@ -116,6 +124,23 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
                 _, select_index = torch.topk(confidence[j], k=num_transfer_tokens[j, i])
                 transfer_index[j, select_index] = True
             x[transfer_index] = x0[transfer_index]
+            if trace_callback is not None:
+                hidden_states = None
+                if hasattr(output, 'hidden_states') and output.hidden_states:
+                    hidden_states = output.hidden_states[-1]
+                    if cfg_scale > 0.:
+                        hidden_states = torch.chunk(hidden_states, 2, dim=0)[0]
+                trace_callback(
+                    x=x,
+                    logits=logits,
+                    hidden_states=hidden_states,
+                    prompt_length=prompt.shape[1],
+                    global_step=global_step,
+                    total_steps=total_steps,
+                    num_block=num_block,
+                    step_in_block=i,
+                )
+            global_step += 1
 
     return x
 
