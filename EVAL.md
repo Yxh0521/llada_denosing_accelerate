@@ -154,3 +154,22 @@ for their great work!
 
 
 
+
+
+## Early-stop research workflow on GSM8K
+If you want to study decoding early-stop signals with OpenCompass-style GSM8K prompts, you can use:
+
+- `early_stop/extract_gsm8k_step_traces.py`
+  - Runs LLaDA on GSM8K **train** split with OpenCompass prompt format.
+  - Saves one snapshot every `--capture-every` steps (default: 30).
+  - Each snapshot includes:
+    - token-level hidden states (`hidden_state`)
+    - token-level confidence scores on unresolved positions (`token_confidence`)
+    - current-step intermediate decoding result (`step_result`)
+    - top-k candidate token info (`candidate_tokens`, including logits/probs).
+
+Example:
+
+```bash
+python early_stop/extract_gsm8k_step_traces.py   --model GSAI-ML/LLaDA-8B-Instruct   --dataset opencompass/gsm8k   --split train   --max-samples 200   --steps 256   --gen-length 256   --block-length 8   --capture-every 30   --topk 5   --output outputs/gsm8k_step_traces.pt
+```
