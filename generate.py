@@ -41,8 +41,22 @@ def get_num_transfer_tokens(mask_index, steps):
 
 
 @ torch.no_grad()
-def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, block_length=128, temperature=0.,
-             cfg_scale=0., remasking='low_confidence', mask_id=126336, logits_eos_inf=False, confidence_eos_eot_inf=False):
+def generate(model,
+             prompt,
+             attention_mask=None,
+             steps=128,
+             gen_length=128,
+             block_length=128,
+             temperature=0.,
+             cfg_scale=0.,
+             remasking='low_confidence',
+             mask_id=126336,
+             logits_eos_inf=False,
+             confidence_eos_eot_inf=False,
+             return_trace=False,
+             trace_interval=30,
+             trace_batch_index=0,
+             trace_topk=5):
     '''
     Args:
         model: Mask predictor.
@@ -71,10 +85,15 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
     assert steps % num_blocks == 0
     steps = steps // num_blocks
 
+    trace_data = []
+    total_steps = steps * num_blocks
+    step_counter = 0
+
     for num_block in range(num_blocks):
         block_mask_index = (x[:, prompt.shape[1] + num_block * block_length: prompt.shape[1] + (num_block + 1) * block_length:] == mask_id)
         num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps)
         for i in range(steps):
+            step_counter += 1
             mask_index = (x == mask_id)
             if cfg_scale > 0.:
                 un_x = x.clone()
@@ -82,11 +101,21 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
                 x_ = torch.cat([x, un_x], dim=0)
                 if attention_mask is not None:
                     attention_mask_ = torch.cat([attention_mask, attention_mask], dim=0)
-                logits = model(x_, attention_mask=attention_mask_).logits
+                outputs = model(
+                    x_,
+                    attention_mask=attention_mask_,
+                    output_hidden_states=return_trace,
+                    return_dict=True)
+                logits = outputs.logits
                 logits, un_logits = torch.chunk(logits, 2, dim=0)
                 logits = un_logits + (cfg_scale + 1) * (logits - un_logits)
             else:
-                logits = model(x, attention_mask=attention_mask).logits
+                outputs = model(
+                    x,
+                    attention_mask=attention_mask,
+                    output_hidden_states=return_trace,
+                    return_dict=True)
+                logits = outputs.logits
 
             if logits_eos_inf:
                 logits[:, :, 126081] = -torch.inf
@@ -117,6 +146,28 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
                 transfer_index[j, select_index] = True
             x[transfer_index] = x0[transfer_index]
 
+            if return_trace and step_counter % trace_interval == 0 and trace_batch_index < x.shape[0]:
+                logits_for_trace = logits[trace_batch_index]
+                masked_positions = torch.where(mask_index[trace_batch_index])[0]
+                topk_tokens = []
+                if masked_positions.numel() > 0:
+                    pos = masked_positions[0]
+                    topk_scores, topk_idx = torch.topk(logits_for_trace[pos], k=trace_topk)
+                    topk_tokens = list(
+                        zip(topk_idx.detach().cpu().tolist(),
+                            topk_scores.detach().cpu().tolist()))
+                trace_item = dict(
+                    step=step_counter,
+                    total_steps=total_steps,
+                    token_ids=x[trace_batch_index].detach().cpu().clone(),
+                    topk_candidate_tokens=topk_tokens,
+                )
+                if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
+                    trace_item['hidden_state'] = outputs.hidden_states[-1][trace_batch_index].detach().cpu().to(torch.float16).clone()
+                trace_data.append(trace_item)
+
+    if return_trace:
+        return x, trace_data
     return x
 
 
