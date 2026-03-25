@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from pathlib import Path
 llada_root = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(llada_root))
@@ -143,6 +144,9 @@ class LLaDAModel(BaseModel):
                  batch_size_ = 1,
                  diff_confidence_eos_eot_inf = False,
                  diff_logits_eos_inf = False,
+                 trace_every_n_steps = 0,
+                 trace_topk = 5,
+                 trace_output_path: Optional[str] = None,
                  ) -> None:
         super().__init__(path=path,
                          max_seq_len=max_seq_len,
@@ -182,6 +186,10 @@ class LLaDAModel(BaseModel):
         self.mask_id = mask_id
         self.diff_confidence_eos_eot_inf = diff_confidence_eos_eot_inf
         self.diff_logits_eos_inf = diff_logits_eos_inf
+        self.trace_every_n_steps = trace_every_n_steps
+        self.trace_topk = trace_topk
+        self.trace_output_path = trace_output_path
+        self.last_generation_traces = []
 
         self.template_parser = _get_meta_template(meta_template)
 
@@ -379,6 +387,7 @@ class LLaDAModel(BaseModel):
         print('final prompt:', prompt)
         self.tokenizer.padding_side = "left" 
         prompt = self.tokenizer.batch_encode_plus(prompt, padding = True, return_tensors='pt')['input_ids']
+        use_trace = self.trace_every_n_steps and self.trace_every_n_steps > 0
         x = LLaDA_generate(
             model = self.model,
             prompt = prompt.to(self.model.device),
@@ -391,7 +400,14 @@ class LLaDAModel(BaseModel):
             mask_id = self.mask_id,
             confidence_eos_eot_inf = self.diff_confidence_eos_eot_inf,
             logits_eos_inf = self.diff_logits_eos_inf,
+            return_trace=use_trace,
+            trace_interval=self.trace_every_n_steps if use_trace else 30,
+            trace_batch_index=0,
+            trace_topk=self.trace_topk,
         )
+        trace_data = []
+        if use_trace:
+            x, trace_data = x
         responses = []
         batch_size = prompt.shape[0]
         
@@ -402,6 +418,34 @@ class LLaDAModel(BaseModel):
             print(f'Response {i}:', responses[i])
             print('====================')
         print('--------------------')
+        self.last_generation_traces = []
+        if use_trace:
+            for trace_item in trace_data:
+                generation_tokens = trace_item['token_ids'][-self.gen_length:]
+                decoded = self.tokenizer.decode(
+                    generation_tokens, skip_special_tokens=True)
+                self.last_generation_traces.append(
+                    dict(
+                        step=trace_item['step'],
+                        total_steps=trace_item['total_steps'],
+                        candidate_answer=decoded,
+                        candidate_tokens=trace_item['topk_candidate_tokens'],
+                        hidden_state=trace_item.get('hidden_state')))
+            if self.trace_output_path:
+                trace_dir = os.path.dirname(self.trace_output_path)
+                if trace_dir:
+                    os.makedirs(trace_dir, exist_ok=True)
+                serializable_traces = []
+                for item in self.last_generation_traces:
+                    serializable = dict(item)
+                    serializable['hidden_state'] = (serializable['hidden_state']
+                                                    .tolist()
+                                                    if serializable[
+                                                        'hidden_state'] is not None else None)
+                    serializable_traces.append(serializable)
+                with open(self.trace_output_path, 'w',
+                          encoding='utf-8') as f:
+                    json.dump(serializable_traces, f, ensure_ascii=False)
         return responses
     
     def get_ppl(self,
