@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+import re
 from pathlib import Path
 llada_root = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(llada_root))
@@ -64,6 +66,22 @@ def get_num_transfer_tokens(mask_index, steps):
         num_transfer_tokens[i, :remainder[i]] += 1
 
     return num_transfer_tokens
+
+
+def _gsm8k_dataset_postprocess(text: Optional[str]) -> Optional[str]:
+    if not text:
+        return None
+    if '#### ' not in text:
+        return None
+    return text.split('#### ')[1].replace(',', '')
+
+
+def _gsm8k_postprocess(text: str) -> str:
+    text = text.split('Question:')[0]
+    numbers = re.findall(r'\-?\d+\.\d+|\-?\d+', text)
+    if not numbers:
+        return 'NULL'
+    return numbers[-1]
 
 
 @MODELS.register_module()
@@ -143,6 +161,11 @@ class LLaDAModel(BaseModel):
                  batch_size_ = 1,
                  diff_confidence_eos_eot_inf = False,
                  diff_logits_eos_inf = False,
+                 trace_enabled = False,
+                 trace_every_steps = 30,
+                 trace_topk = 5,
+                 trace_output_path = 'outputs/gsm8k_trace.jsonl',
+                 trace_sample_index = 0,
                  ) -> None:
         super().__init__(path=path,
                          max_seq_len=max_seq_len,
@@ -182,8 +205,71 @@ class LLaDAModel(BaseModel):
         self.mask_id = mask_id
         self.diff_confidence_eos_eot_inf = diff_confidence_eos_eot_inf
         self.diff_logits_eos_inf = diff_logits_eos_inf
+        self.trace_enabled = trace_enabled
+        self.trace_every_steps = trace_every_steps
+        self.trace_topk = trace_topk
+        self.trace_output_path = trace_output_path
+        self.trace_sample_index = trace_sample_index
+        self._trace_context = {}
 
         self.template_parser = _get_meta_template(meta_template)
+
+    def set_trace_context(self,
+                          golds: Optional[List[str]] = None,
+                          sample_indices: Optional[List[int]] = None):
+        self._trace_context = {
+            'golds': golds or [],
+            'sample_indices': sample_indices or [],
+        }
+
+    def _trace_callback(self,
+                        x: torch.Tensor,
+                        logits: torch.Tensor,
+                        hidden_states: Optional[torch.Tensor],
+                        prompt_length: int,
+                        global_step: int,
+                        total_steps: int,
+                        **kwargs):
+        if (global_step + 1) % self.trace_every_steps != 0:
+            return
+        if self.trace_sample_index >= x.shape[0]:
+            return
+        sample_idx = self.trace_sample_index
+        seq_pos = x.shape[1] - 1
+        token_ids = torch.topk(logits[sample_idx, seq_pos],
+                               k=self.trace_topk).indices.tolist()
+        token_texts = [
+            self.tokenizer.decode([tid], skip_special_tokens=False)
+            for tid in token_ids
+        ]
+        candidate_answer = self.tokenizer.decode(
+            x[sample_idx, prompt_length:], skip_special_tokens=True)
+        golds = self._trace_context.get('golds', [])
+        gold = golds[sample_idx] if sample_idx < len(golds) else None
+        gold_value = _gsm8k_dataset_postprocess(gold) if gold else None
+        pred_value = _gsm8k_postprocess(candidate_answer)
+        is_correct = (pred_value == gold_value) if gold_value is not None else None
+        hidden_state = None
+        if hidden_states is not None:
+            hidden_state = hidden_states[sample_idx, seq_pos].detach().float().cpu().tolist()
+        sample_indices = self._trace_context.get('sample_indices', [])
+        sample_index = sample_indices[sample_idx] if sample_idx < len(sample_indices) else None
+        trace_item = {
+            'global_step': global_step + 1,
+            'total_steps': total_steps,
+            'sample_index': sample_index,
+            'candidate_token_ids': token_ids,
+            'candidate_tokens': token_texts,
+            'candidate_answer': candidate_answer,
+            'pred_value': pred_value,
+            'gold_value': gold_value,
+            'label': is_correct,
+            'hidden_state': hidden_state,
+        }
+        trace_path = Path(self.trace_output_path)
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        with trace_path.open('a', encoding='utf-8') as f:
+            f.write(json.dumps(trace_item, ensure_ascii=False) + '\n')
 
     def _load_tokenizer(self, path: str, tokenizer_path: Optional[str],
                         tokenizer_kwargs: dict):
@@ -391,6 +477,7 @@ class LLaDAModel(BaseModel):
             mask_id = self.mask_id,
             confidence_eos_eot_inf = self.diff_confidence_eos_eot_inf,
             logits_eos_inf = self.diff_logits_eos_inf,
+            trace_callback=self._trace_callback if self.trace_enabled else None,
         )
         responses = []
         batch_size = prompt.shape[0]
@@ -527,6 +614,7 @@ class LLaDABaseModel(LLaDAModel):
             mask_id = self.mask_id,
             confidence_eos_eot_inf = self.diff_confidence_eos_eot_inf,
             logits_eos_inf = self.diff_logits_eos_inf,
+            trace_callback=self._trace_callback if self.trace_enabled else None,
         )
         responses = []
         batch_size = prompt.shape[0]

@@ -149,6 +149,10 @@ class GenInferencer(BaseInferencer):
             if 'min_out_len' in sig.parameters:
                 extra_gen_kwargs['min_out_len'] = self.min_out_len
             with torch.no_grad():
+                if hasattr(self.model, 'set_trace_context'):
+                    self.model.set_trace_context(
+                        golds=list(golds),
+                        sample_indices=list(range(index, index + len(entry))))
                 parsed_entries = self.model.parse_template(entry, mode='gen')
                 results = self.model.generate_from_template(
                     entry, max_out_len=self.max_out_len, **extra_gen_kwargs)
