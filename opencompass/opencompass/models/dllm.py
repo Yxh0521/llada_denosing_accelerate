@@ -147,7 +147,15 @@ class LLaDAModel(BaseModel):
                  diff_trace_every = 0,
                  diff_trace_topk = 5,
                  diff_trace_output = None,
+                 **kwargs,
                  ) -> None:
+        # Backward/forward compatibility for custom config keys
+        if 'diff_trace_every' in kwargs:
+            diff_trace_every = kwargs.pop('diff_trace_every')
+        if 'diff_trace_topk' in kwargs:
+            diff_trace_topk = kwargs.pop('diff_trace_topk')
+        if 'diff_trace_output' in kwargs:
+            diff_trace_output = kwargs.pop('diff_trace_output')
         super().__init__(path=path,
                          max_seq_len=max_seq_len,
                          tokenizer_only=tokenizer_only,
