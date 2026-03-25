@@ -9,12 +9,12 @@ with read_base():
         models as llada_instruct_8b_models
 
 # Keep the same 4-shot GSM8K prompt template as gsm8k_gen,
-# but run inference on GSM8K train split for early-stop tracing experiments.
+# and run inference on GSM8K test split for early-stop tracing experiments.
 datasets = deepcopy(gsm8k_datasets)
 for dataset in datasets:
-    dataset['abbr'] = 'gsm8k_train'
+    dataset['abbr'] = 'gsm8k_test'
     dataset['reader_cfg'] = deepcopy(dataset['reader_cfg'])
-    dataset['reader_cfg'].update(train_split='train', test_split='train')
+    dataset['reader_cfg'].update(train_split='train', test_split='test')
 
 models = deepcopy(llada_instruct_8b_models)
 
