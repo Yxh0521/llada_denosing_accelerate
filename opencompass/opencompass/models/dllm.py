@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 from pathlib import Path
 llada_root = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(llada_root))
@@ -66,6 +67,22 @@ def get_num_transfer_tokens(mask_index, steps):
         num_transfer_tokens[i, :remainder[i]] += 1
 
     return num_transfer_tokens
+
+
+def _gsm8k_dataset_postprocess(text: Optional[str]) -> Optional[str]:
+    if not text:
+        return None
+    if '#### ' not in text:
+        return None
+    return text.split('#### ')[1].replace(',', '')
+
+
+def _gsm8k_postprocess(text: str) -> str:
+    text = text.split('Question:')[0]
+    numbers = re.findall(r'\-?\d+\.\d+|\-?\d+', text)
+    if not numbers:
+        return 'NULL'
+    return numbers[-1]
 
 
 @MODELS.register_module()
@@ -230,8 +247,8 @@ class LLaDAModel(BaseModel):
             x[sample_idx, prompt_length:], skip_special_tokens=True)
         golds = self._trace_context.get('golds', [])
         gold = golds[sample_idx] if sample_idx < len(golds) else None
-        gold_value = gsm8k_dataset_postprocess(gold) if gold else None
-        pred_value = gsm8k_postprocess(candidate_answer)
+        gold_value = _gsm8k_dataset_postprocess(gold) if gold else None
+        pred_value = _gsm8k_postprocess(candidate_answer)
         is_correct = (pred_value == gold_value) if gold_value is not None else None
         hidden_state = None
         if hidden_states is not None:
