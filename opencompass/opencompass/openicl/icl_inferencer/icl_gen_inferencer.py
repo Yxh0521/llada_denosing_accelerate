@@ -4,6 +4,7 @@ import inspect
 import json
 import os
 import os.path as osp
+import re
 import time
 from typing import List, Optional
 
@@ -21,6 +22,13 @@ from ..utils.logging import get_logger
 from .icl_base_inferencer import BaseInferencer, GenInferencerOutputHandler
 
 logger = get_logger(__name__)
+
+
+def _extract_last_number(text: str) -> str:
+    numbers = re.findall(r'\-?\d+\.\d+|\-?\d+', text)
+    if not numbers:
+        return 'NULL'
+    return numbers[-1]
 
 
 @ICL_INFERENCERS.register_module()
@@ -74,6 +82,11 @@ class GenInferencer(BaseInferencer):
         self.min_out_len = min_out_len
         self.stopping_criteria = stopping_criteria
         self.dump_timer = kwargs.get('dump_timer', False)
+        self.trace_dump_filename = kwargs.get('trace_dump_filename',
+                                              'trace_candidates.jsonl')
+        self.trace_dump_path = kwargs.get('trace_dump_path', None)
+        self.trace_max_samples = kwargs.get('trace_max_samples', 1)
+        self._traced_samples = 0
 
         if self.model.is_api and save_every is None:
             save_every = 1
@@ -135,6 +148,11 @@ class GenInferencer(BaseInferencer):
 
         start_time_stamp = time.time()
         num_sample = 0
+        if self.trace_dump_path:
+            trace_dump_path = self.trace_dump_path
+        else:
+            trace_dump_path = os.path.join(output_json_filepath,
+                                           self.trace_dump_filename)
         for datum in tqdm(dataloader, disable=not self.is_main_process):
             if ds_reader.output_column:
                 entry, golds = list(zip(*datum))
@@ -166,6 +184,41 @@ class GenInferencer(BaseInferencer):
                                             prediction,
                                             index,
                                             gold=gold)
+                traces = getattr(self.model, 'last_generation_traces', None)
+                if (traces and gold is not None and self.is_main_process
+                        and self._traced_samples < self.trace_max_samples):
+                    trace_dump_dir = os.path.dirname(trace_dump_path)
+                    if trace_dump_dir:
+                        os.makedirs(trace_dump_dir, exist_ok=True)
+                    else:
+                        os.makedirs(output_json_filepath, exist_ok=True)
+                    with open(trace_dump_path, 'a', encoding='utf-8') as f:
+                        trace_records = []
+                        for trace_item in traces:
+                            candidate = trace_item.get('candidate_answer', '')
+                            candidate_processed = _extract_last_number(
+                                candidate.split('Question:')[0])
+                            trace_record = {
+                                'sample_index': index,
+                                'step': trace_item.get('step'),
+                                'total_steps': trace_item.get('total_steps'),
+                                'candidate_answer': candidate,
+                                'candidate_tokens': trace_item.get(
+                                    'candidate_tokens'),
+                                'hidden_state': trace_item.get('hidden_state')
+                                .tolist()
+                                if trace_item.get('hidden_state') is not None else None,
+                                'gold_answer': gold,
+                                'label': int(candidate_processed == str(gold))
+                            }
+                            trace_records.append(trace_record)
+                        f.write(
+                            json.dumps(
+                                dict(
+                                    sample_index=index,
+                                    trace=trace_records),
+                                ensure_ascii=False) + '\n')
+                    self._traced_samples += 1
                 index = index + 1
 
             # 5-4. Save intermediate results
