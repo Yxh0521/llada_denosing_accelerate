@@ -32,6 +32,9 @@ eval_cfg = {
     'batch_size_': 1,
     'trace_every_n_steps': 1,
     'trace_topk': 5,
+    # Optional: model-side trace dump path (contains hidden_state per traced step).
+    'trace_output_path':
+    'outputs/custom_traces/gsm8k_test_5samples_model_trace.json',
 }
 for model in models:
     model.update(eval_cfg)
@@ -41,8 +44,6 @@ for dataset in datasets:
     inferencer_cfg = dataset['infer_cfg']['inferencer']
     inferencer_cfg.update(
         trace_dump_filename='trace_candidates_every_step_5samples.jsonl',
-        # You can set an absolute/relative path to control dump location.
-        # trace_dump_path='outputs/custom_traces/trace_candidates_every_step_5samples.jsonl',
         trace_max_samples=5,
     )
 

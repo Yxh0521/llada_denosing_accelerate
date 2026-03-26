@@ -84,7 +84,6 @@ class GenInferencer(BaseInferencer):
         self.dump_timer = kwargs.get('dump_timer', False)
         self.trace_dump_filename = kwargs.get('trace_dump_filename',
                                               'trace_candidates.jsonl')
-        self.trace_dump_path = kwargs.get('trace_dump_path', None)
         self.trace_max_samples = kwargs.get('trace_max_samples', 1)
         self._traced_samples = 0
 
@@ -148,11 +147,8 @@ class GenInferencer(BaseInferencer):
 
         start_time_stamp = time.time()
         num_sample = 0
-        if self.trace_dump_path:
-            trace_dump_path = self.trace_dump_path
-        else:
-            trace_dump_path = os.path.join(output_json_filepath,
-                                           self.trace_dump_filename)
+        trace_dump_path = os.path.join(output_json_filepath,
+                                       self.trace_dump_filename)
         for datum in tqdm(dataloader, disable=not self.is_main_process):
             if ds_reader.output_column:
                 entry, golds = list(zip(*datum))
@@ -187,11 +183,7 @@ class GenInferencer(BaseInferencer):
                 traces = getattr(self.model, 'last_generation_traces', None)
                 if (traces and gold is not None and self.is_main_process
                         and self._traced_samples < self.trace_max_samples):
-                    trace_dump_dir = os.path.dirname(trace_dump_path)
-                    if trace_dump_dir:
-                        os.makedirs(trace_dump_dir, exist_ok=True)
-                    else:
-                        os.makedirs(output_json_filepath, exist_ok=True)
+                    os.makedirs(output_json_filepath, exist_ok=True)
                     with open(trace_dump_path, 'a', encoding='utf-8') as f:
                         trace_records = []
                         for trace_item in traces:
