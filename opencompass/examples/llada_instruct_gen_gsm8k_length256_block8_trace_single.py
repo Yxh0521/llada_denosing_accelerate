@@ -7,13 +7,13 @@ Usage:
 
 Note:
 - This config keeps the same 4-shot prompt template as gsm8k_gen_1d7fe4.
-- It uses built-in GSM8KDataset and slices test split with reader_cfg.test_range.
+- It slices GSM8K test split to exactly one sample (SAMPLE_ID).
 - If you want per-step correctness in `.meta.json`, set TRACE_REFERENCE_ANSWER
   to the gold numeric answer string (e.g. "42").
 """
 
+from datasets import DatasetDict
 from mmengine.config import read_base
-from opencompass.datasets import GSM8KDataset
 
 SAMPLE_ID = 0
 TRACE_TOPK = 5
@@ -24,16 +24,26 @@ with read_base():
         models as llada_instruct_8b_models
     from opencompass.configs.datasets.gsm8k.gsm8k_gen_1d7fe4 import \
         gsm8k_reader_cfg, gsm8k_infer_cfg, gsm8k_eval_cfg
+    from opencompass.datasets.gsm8k import GSM8KDataset
 
-single_reader_cfg = dict(gsm8k_reader_cfg)
-single_reader_cfg['test_range'] = f'[{SAMPLE_ID}:{SAMPLE_ID + 1}]'
+
+class GSM8KSingleSampleDataset(GSM8KDataset):
+
+    @staticmethod
+    def load(path):
+        dataset = GSM8KDataset.load(path)
+        return DatasetDict({
+            'train': dataset['train'],
+            'test': dataset['test'].select([SAMPLE_ID]),
+        })
+
 
 datasets = [
     dict(
         abbr=f'gsm8k_single_{SAMPLE_ID}',
-        type=GSM8KDataset,
+        type=GSM8KSingleSampleDataset,
         path='opencompass/gsm8k',
-        reader_cfg=single_reader_cfg,
+        reader_cfg=gsm8k_reader_cfg,
         infer_cfg=gsm8k_infer_cfg,
         eval_cfg=gsm8k_eval_cfg,
     )
