@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from pathlib import Path
 llada_root = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(llada_root))
@@ -143,6 +144,11 @@ class LLaDAModel(BaseModel):
                  batch_size_ = 1,
                  diff_confidence_eos_eot_inf = False,
                  diff_logits_eos_inf = False,
+                 save_step_trace: bool = False,
+                 step_trace_path: Optional[str] = None,
+                 step_trace_topk: int = 5,
+                 trace_sample_id: Optional[str] = None,
+                 trace_reference_answer: Optional[str] = None,
                  ) -> None:
         super().__init__(path=path,
                          max_seq_len=max_seq_len,
@@ -182,6 +188,11 @@ class LLaDAModel(BaseModel):
         self.mask_id = mask_id
         self.diff_confidence_eos_eot_inf = diff_confidence_eos_eot_inf
         self.diff_logits_eos_inf = diff_logits_eos_inf
+        self.save_step_trace = save_step_trace
+        self.step_trace_path = step_trace_path
+        self.step_trace_topk = step_trace_topk
+        self.trace_sample_id = trace_sample_id
+        self.trace_reference_answer = trace_reference_answer
 
         self.template_parser = _get_meta_template(meta_template)
 
@@ -379,7 +390,7 @@ class LLaDAModel(BaseModel):
         print('final prompt:', prompt)
         self.tokenizer.padding_side = "left" 
         prompt = self.tokenizer.batch_encode_plus(prompt, padding = True, return_tensors='pt')['input_ids']
-        x = LLaDA_generate(
+        output = LLaDA_generate(
             model = self.model,
             prompt = prompt.to(self.model.device),
             steps = self.gen_steps,
@@ -391,7 +402,13 @@ class LLaDAModel(BaseModel):
             mask_id = self.mask_id,
             confidence_eos_eot_inf = self.diff_confidence_eos_eot_inf,
             logits_eos_inf = self.diff_logits_eos_inf,
+            return_traces=self.save_step_trace,
+            trace_topk=self.step_trace_topk,
         )
+        if self.save_step_trace:
+            x, trace_steps = output
+        else:
+            x = output
         responses = []
         batch_size = prompt.shape[0]
         
@@ -402,6 +419,49 @@ class LLaDAModel(BaseModel):
             print(f'Response {i}:', responses[i])
             print('====================')
         print('--------------------')
+        if self.save_step_trace and self.step_trace_path:
+            trace_payload = {
+                'sample_id': self.trace_sample_id,
+                'reference_answer': self.trace_reference_answer,
+                'gen_steps': self.gen_steps,
+                'gen_length': self.gen_length,
+                'gen_blocksize': self.gen_blocksize,
+                'step_trace_topk': self.step_trace_topk,
+                'responses': responses,
+                'steps': trace_steps,
+            }
+            trace_dir = os.path.dirname(self.step_trace_path)
+            if trace_dir:
+                os.makedirs(trace_dir, exist_ok=True)
+            save_path = self.step_trace_path
+            if os.path.exists(save_path):
+                stem, suffix = os.path.splitext(save_path)
+                idx = 1
+                while True:
+                    candidate = f'{stem}_{idx}{suffix}'
+                    if not os.path.exists(candidate):
+                        save_path = candidate
+                        break
+                    idx += 1
+            torch.save(trace_payload, save_path)
+            if self.trace_reference_answer is not None:
+                from opencompass.datasets.gsm8k import Gsm8kEvaluator, gsm8k_postprocess
+                evaluator = Gsm8kEvaluator()
+                step_meta = []
+                for step in trace_steps:
+                    current_text = self.tokenizer.decode(step['current_token_ids'][0], skip_special_tokens=True)
+                    pred = gsm8k_postprocess(current_text)
+                    step_meta.append({
+                        'block_id': step['block_id'],
+                        'step_id': step['step_id'],
+                        'prediction': pred,
+                        'is_correct': evaluator.is_equal(pred, self.trace_reference_answer),
+                    })
+                meta_path = f"{save_path}.meta.json"
+                with open(meta_path, 'w', encoding='utf-8') as f:
+                    json.dump(step_meta, f, ensure_ascii=False, indent=2)
+                print('step correctness metadata saved to:', meta_path)
+            print('step trace saved to:', save_path)
         return responses
     
     def get_ppl(self,
