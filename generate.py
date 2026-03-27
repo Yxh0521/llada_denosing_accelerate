@@ -41,8 +41,20 @@ def get_num_transfer_tokens(mask_index, steps):
 
 
 @ torch.no_grad()
-def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, block_length=128, temperature=0.,
-             cfg_scale=0., remasking='low_confidence', mask_id=126336, logits_eos_inf=False, confidence_eos_eot_inf=False):
+def generate(model,
+             prompt,
+             attention_mask=None,
+             steps=128,
+             gen_length=128,
+             block_length=128,
+             temperature=0.,
+             cfg_scale=0.,
+             remasking='low_confidence',
+             mask_id=126336,
+             logits_eos_inf=False,
+             confidence_eos_eot_inf=False,
+             return_traces=False,
+             trace_topk=5):
     '''
     Args:
         model: Mask predictor.
@@ -71,6 +83,8 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
     assert steps % num_blocks == 0
     steps = steps // num_blocks
 
+    trace_steps = []
+
     for num_block in range(num_blocks):
         block_mask_index = (x[:, prompt.shape[1] + num_block * block_length: prompt.shape[1] + (num_block + 1) * block_length:] == mask_id)
         num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps)
@@ -82,11 +96,26 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
                 x_ = torch.cat([x, un_x], dim=0)
                 if attention_mask is not None:
                     attention_mask_ = torch.cat([attention_mask, attention_mask], dim=0)
-                logits = model(x_, attention_mask=attention_mask_).logits
+                outputs = model(
+                    x_,
+                    attention_mask=attention_mask_,
+                    output_hidden_states=return_traces,
+                    return_dict=True)
+                logits = outputs.logits
                 logits, un_logits = torch.chunk(logits, 2, dim=0)
                 logits = un_logits + (cfg_scale + 1) * (logits - un_logits)
+                hidden_states = None
+                if return_traces:
+                    hs, _ = torch.chunk(outputs.hidden_states[-1], 2, dim=0)
+                    hidden_states = hs
             else:
-                logits = model(x, attention_mask=attention_mask).logits
+                outputs = model(
+                    x,
+                    attention_mask=attention_mask,
+                    output_hidden_states=return_traces,
+                    return_dict=True)
+                logits = outputs.logits
+                hidden_states = outputs.hidden_states[-1] if return_traces else None
 
             if logits_eos_inf:
                 logits[:, :, 126081] = -torch.inf
@@ -117,6 +146,24 @@ def generate(model, prompt, attention_mask=None, steps=128, gen_length=128, bloc
                 transfer_index[j, select_index] = True
             x[transfer_index] = x0[transfer_index]
 
+            if return_traces:
+                gen_slice = slice(prompt.shape[1], prompt.shape[1] + gen_length)
+                p = F.softmax(logits, dim=-1)
+                topk = torch.topk(p[:, gen_slice, :], k=trace_topk, dim=-1)
+                trace_steps.append({
+                    'block_id': num_block,
+                    'step_id': i,
+                    'hidden_states': hidden_states[:, gen_slice, :].detach().cpu().to(torch.float16),
+                    'candidate_token_ids': topk.indices.detach().cpu().to(torch.int32),
+                    'candidate_token_probs': topk.values.detach().cpu().to(torch.float16),
+                    'selected_token_ids': x0[:, gen_slice].detach().cpu().to(torch.int32),
+                    'selected_token_confidence': x0_p[:, gen_slice].detach().cpu().to(torch.float16),
+                    'transfer_index': transfer_index[:, gen_slice].detach().cpu(),
+                    'current_token_ids': x[:, gen_slice].detach().cpu().to(torch.int32),
+                })
+
+    if return_traces:
+        return x, trace_steps
     return x
 
 
