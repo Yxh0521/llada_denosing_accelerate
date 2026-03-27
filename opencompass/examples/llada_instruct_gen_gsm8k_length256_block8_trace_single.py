@@ -12,8 +12,8 @@ Note:
   to the gold numeric answer string (e.g. "42").
 """
 
+from datasets import DatasetDict
 from mmengine.config import read_base
-from opencompass.datasets import GSM8KSingleSampleDataset
 
 SAMPLE_ID = 0
 TRACE_TOPK = 5
@@ -24,6 +24,18 @@ with read_base():
         models as llada_instruct_8b_models
     from opencompass.configs.datasets.gsm8k.gsm8k_gen_1d7fe4 import \
         gsm8k_reader_cfg, gsm8k_infer_cfg, gsm8k_eval_cfg
+    from opencompass.datasets.gsm8k import GSM8KDataset
+
+
+class GSM8KSingleSampleDataset(GSM8KDataset):
+
+    @staticmethod
+    def load(path):
+        dataset = GSM8KDataset.load(path)
+        return DatasetDict({
+            'train': dataset['train'],
+            'test': dataset['test'].select([SAMPLE_ID]),
+        })
 
 
 datasets = [
@@ -31,7 +43,6 @@ datasets = [
         abbr=f'gsm8k_single_{SAMPLE_ID}',
         type=GSM8KSingleSampleDataset,
         path='opencompass/gsm8k',
-        sample_id=SAMPLE_ID,
         reader_cfg=gsm8k_reader_cfg,
         infer_cfg=gsm8k_infer_cfg,
         eval_cfg=gsm8k_eval_cfg,
