@@ -1,4 +1,4 @@
-"""Run one GSM8K test sample with LLaDA (8-block, 256-step) and step trace dump.
+"""Run GSM8K with LLaDA (8-block, 256-step) and step trace dump.
 
 Usage:
     cd opencompass
@@ -7,15 +7,13 @@ Usage:
 
 Note:
 - This config keeps the same 4-shot prompt template as gsm8k_gen_1d7fe4.
-- It slices GSM8K test split to exactly one sample (SAMPLE_ID).
-- If you want per-step correctness in `.meta.json`, set TRACE_REFERENCE_ANSWER
-  to the gold numeric answer string (e.g. "42").
+- It reuses framework GSM8K dataset config directly (full dataset).
 """
 
-from datasets import DatasetDict
+from copy import deepcopy
+
 from mmengine.config import read_base
 
-SAMPLE_ID = 0
 TRACE_TOPK = 5
 TRACE_REFERENCE_ANSWER = None  # e.g. "42"
 
@@ -23,31 +21,10 @@ with read_base():
     from opencompass.configs.models.dllm.llada_instruct_8b import \
         models as llada_instruct_8b_models
     from opencompass.configs.datasets.gsm8k.gsm8k_gen_1d7fe4 import \
-        gsm8k_reader_cfg, gsm8k_infer_cfg, gsm8k_eval_cfg
-    from opencompass.datasets.gsm8k import GSM8KDataset
+        gsm8k_datasets
 
+datasets = deepcopy(gsm8k_datasets)
 
-class GSM8KSingleSampleDataset(GSM8KDataset):
-
-    @staticmethod
-    def load(path):
-        dataset = GSM8KDataset.load(path)
-        return DatasetDict({
-            'train': dataset['train'],
-            'test': dataset['test'].select([SAMPLE_ID]),
-        })
-
-
-datasets = [
-    dict(
-        abbr=f'gsm8k_single_{SAMPLE_ID}',
-        type=GSM8KSingleSampleDataset,
-        path='opencompass/gsm8k',
-        reader_cfg=gsm8k_reader_cfg,
-        infer_cfg=gsm8k_infer_cfg,
-        eval_cfg=gsm8k_eval_cfg,
-    )
-]
 
 models = llada_instruct_8b_models
 
@@ -59,8 +36,8 @@ trace_cfg = {
     'batch_size_': 1,
     'save_step_trace': True,
     'step_trace_topk': TRACE_TOPK,
-    'step_trace_path': f'outputs/gsm8k_single_{SAMPLE_ID}_trace.pt',
-    'trace_sample_id': str(SAMPLE_ID),
+    'step_trace_path': 'outputs/gsm8k_trace.pt',
+    'trace_sample_id': None,
     'trace_reference_answer': TRACE_REFERENCE_ANSWER,
 }
 

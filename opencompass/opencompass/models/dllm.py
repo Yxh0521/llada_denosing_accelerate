@@ -433,7 +433,17 @@ class LLaDAModel(BaseModel):
             trace_dir = os.path.dirname(self.step_trace_path)
             if trace_dir:
                 os.makedirs(trace_dir, exist_ok=True)
-            torch.save(trace_payload, self.step_trace_path)
+            save_path = self.step_trace_path
+            if os.path.exists(save_path):
+                stem, suffix = os.path.splitext(save_path)
+                idx = 1
+                while True:
+                    candidate = f'{stem}_{idx}{suffix}'
+                    if not os.path.exists(candidate):
+                        save_path = candidate
+                        break
+                    idx += 1
+            torch.save(trace_payload, save_path)
             if self.trace_reference_answer is not None:
                 from opencompass.datasets.gsm8k import Gsm8kEvaluator, gsm8k_postprocess
                 evaluator = Gsm8kEvaluator()
@@ -447,11 +457,11 @@ class LLaDAModel(BaseModel):
                         'prediction': pred,
                         'is_correct': evaluator.is_equal(pred, self.trace_reference_answer),
                     })
-                meta_path = f"{self.step_trace_path}.meta.json"
+                meta_path = f"{save_path}.meta.json"
                 with open(meta_path, 'w', encoding='utf-8') as f:
                     json.dump(step_meta, f, ensure_ascii=False, indent=2)
                 print('step correctness metadata saved to:', meta_path)
-            print('step trace saved to:', self.step_trace_path)
+            print('step trace saved to:', save_path)
         return responses
     
     def get_ppl(self,
