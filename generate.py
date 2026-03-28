@@ -150,6 +150,47 @@ def generate(model,
                 gen_slice = slice(prompt.shape[1], prompt.shape[1] + gen_length)
                 p = F.softmax(logits, dim=-1)
                 topk = torch.topk(p[:, gen_slice, :], k=trace_topk, dim=-1)
+                gen_confidence = x0_p[:, gen_slice]
+                gen_selected_token_ids = x0[:, gen_slice]
+
+                # Per-step highest-confidence token and its position.
+                max_confidence, max_confidence_pos = torch.max(gen_confidence, dim=-1)
+                max_confidence_token_ids = torch.gather(
+                    gen_selected_token_ids,
+                    dim=-1,
+                    index=max_confidence_pos.unsqueeze(-1)).squeeze(-1)
+
+                # Per-step lowest-confidence token among positions that remain masked (re-masked).
+                gen_mask_index = mask_index[:, gen_slice]
+                gen_transfer_index = transfer_index[:, gen_slice]
+                remask_index = gen_mask_index & (~gen_transfer_index)
+                has_remasked = remask_index.any(dim=-1)
+                remask_confidence = gen_confidence.masked_fill(
+                    ~remask_index, torch.inf)
+                min_remask_confidence, min_remask_pos = torch.min(
+                    remask_confidence, dim=-1)
+                min_remask_token_ids = torch.gather(
+                    gen_selected_token_ids,
+                    dim=-1,
+                    index=min_remask_pos.unsqueeze(-1)).squeeze(-1)
+                min_remask_pos = torch.where(
+                    has_remasked,
+                    min_remask_pos,
+                    torch.full_like(min_remask_pos, -1))
+                min_remask_token_ids = torch.where(
+                    has_remasked,
+                    min_remask_token_ids,
+                    torch.full_like(min_remask_token_ids, -1))
+                min_remask_confidence = torch.where(
+                    has_remasked,
+                    min_remask_confidence,
+                    torch.full_like(min_remask_confidence, float('nan')))
+
+                # Per-step finalized tokens (newly fixed this round, no longer re-masked).
+                finalized_token_ids = torch.where(
+                    gen_transfer_index,
+                    x[:, gen_slice],
+                    torch.full_like(x[:, gen_slice], -1))
                 trace_steps.append({
                     'block_id': num_block,
                     'step_id': i,
@@ -160,6 +201,14 @@ def generate(model,
                     'selected_token_confidence': x0_p[:, gen_slice].detach().cpu().to(torch.float16),
                     'transfer_index': transfer_index[:, gen_slice].detach().cpu(),
                     'current_token_ids': x[:, gen_slice].detach().cpu().to(torch.int32),
+                    'max_confidence_token_ids': max_confidence_token_ids.detach().cpu().to(torch.int32),
+                    'max_confidence_pos': max_confidence_pos.detach().cpu().to(torch.int32),
+                    'max_confidence': max_confidence.detach().cpu().to(torch.float16),
+                    'min_remask_token_ids': min_remask_token_ids.detach().cpu().to(torch.int32),
+                    'min_remask_pos': min_remask_pos.detach().cpu().to(torch.int32),
+                    'min_remask_confidence': min_remask_confidence.detach().cpu().to(torch.float16),
+                    'finalized_token_ids': finalized_token_ids.detach().cpu().to(torch.int32),
+                    'finalized_token_positions': gen_transfer_index.detach().cpu(),
                 })
 
     if return_traces:
