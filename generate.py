@@ -54,7 +54,8 @@ def generate(model,
              logits_eos_inf=False,
              confidence_eos_eot_inf=False,
              return_traces=False,
-             trace_topk=5):
+             trace_topk=5,
+             trace_hidden_layer=-1):
     '''
     Args:
         model: Mask predictor.
@@ -106,7 +107,7 @@ def generate(model,
                 logits = un_logits + (cfg_scale + 1) * (logits - un_logits)
                 hidden_states = None
                 if return_traces:
-                    hs, _ = torch.chunk(outputs.hidden_states[-1], 2, dim=0)
+                    hs, _ = torch.chunk(outputs.hidden_states[trace_hidden_layer], 2, dim=0)
                     hidden_states = hs
             else:
                 outputs = model(
@@ -115,7 +116,7 @@ def generate(model,
                     output_hidden_states=return_traces,
                     return_dict=True)
                 logits = outputs.logits
-                hidden_states = outputs.hidden_states[-1] if return_traces else None
+                hidden_states = outputs.hidden_states[trace_hidden_layer] if return_traces else None
 
             if logits_eos_inf:
                 logits[:, :, 126081] = -torch.inf

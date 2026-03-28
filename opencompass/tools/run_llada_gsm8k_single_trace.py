@@ -34,6 +34,7 @@ def main():
     parser.add_argument('--sample-id', type=int, default=0)
     parser.add_argument('--trace-path', default='outputs/gsm8k_single_trace.pt')
     parser.add_argument('--topk', type=int, default=5)
+    parser.add_argument('--trace-hidden-layer', type=int, default=-1)
     args = parser.parse_args()
 
     sample = load_test_sample(Path(args.dataset_path), args.sample_id)
@@ -51,6 +52,7 @@ def main():
         save_step_trace=True,
         step_trace_path=args.trace_path,
         step_trace_topk=args.topk,
+        step_trace_hidden_layer=args.trace_hidden_layer,
         trace_sample_id=str(args.sample_id),
         trace_reference_answer=answer,
     )

@@ -147,6 +147,7 @@ class LLaDAModel(BaseModel):
                  save_step_trace: bool = False,
                  step_trace_path: Optional[str] = None,
                  step_trace_topk: int = 5,
+                 step_trace_hidden_layer: int = -1,
                  trace_sample_id: Optional[str] = None,
                  trace_reference_answer: Optional[str] = None,
                  ) -> None:
@@ -191,6 +192,7 @@ class LLaDAModel(BaseModel):
         self.save_step_trace = save_step_trace
         self.step_trace_path = step_trace_path
         self.step_trace_topk = step_trace_topk
+        self.step_trace_hidden_layer = step_trace_hidden_layer
         self.trace_sample_id = trace_sample_id
         self.trace_reference_answer = trace_reference_answer
 
@@ -404,6 +406,7 @@ class LLaDAModel(BaseModel):
             logits_eos_inf = self.diff_logits_eos_inf,
             return_traces=self.save_step_trace,
             trace_topk=self.step_trace_topk,
+            trace_hidden_layer=self.step_trace_hidden_layer,
         )
         if self.save_step_trace:
             x, trace_steps = output
@@ -427,6 +430,7 @@ class LLaDAModel(BaseModel):
                 'gen_length': self.gen_length,
                 'gen_blocksize': self.gen_blocksize,
                 'step_trace_topk': self.step_trace_topk,
+                'step_trace_hidden_layer': self.step_trace_hidden_layer,
                 'responses': responses,
                 'steps': trace_steps,
             }
